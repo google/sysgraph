@@ -1,0 +1,73 @@
+# OS / Environment
+.DS_Store
+.env
+.env.local
+
+# IDEs / Editor
+.idea/
+.vscode/
+*.swp
+
+# Bazel (common in Google projects)
+bazel-*
+
+# --- Go ---
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+/sysgraph
+/playground_server
+/bpf_extractor
+/sgmatcher
+
+# Test binaries
+*.test
+
+# Go workspace
+go.work
+go.work.sum
+
+# Go coverage output
+*.out
+coverage.html
+
+# --- TypeScript / Node.js ---
+# Dependencies
+node_modules/
+
+# Build and Output directories
+dist/
+build/
+out/
+.next/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Caches and Configuration
+.eslintcache
+.npm
+*.tsbuildinfo
+
+# Coverage
+coverage/
+.nyc_output/
+
+# Generated TypeScript protos
+ui/proto/
+
+# Generated embed files
+/cmd/playground_server/embed/demo.css.gz
+/cmd/playground_server/embed/ui/playground_app.js
+/cmd/playground_server/embed/ui/*.gz
+/cmd/playground_server/embed/ui/*.map
+
+examples/*/graph/

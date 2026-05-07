@@ -1,0 +1,397 @@
+/**
+ * Copyright 2026 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+html {
+  box-sizing: border-box;
+}
+
+*,
+*:before,
+*:after {
+  box-sizing: inherit;
+}
+
+body,
+.monospace,
+code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-size: 12px;
+  line-height: 16px;
+  height: 100vh;
+}
+
+:root {
+  /* Colors */
+  --playground-bg-color: white;
+  --playground-text-color: #000;
+  --playground-secondary-text-color: #444;
+
+  --playground-border-color: #eee;
+  --playground-border-color-strong: #d3e2fd;
+
+  --playground-hover-bg: #f2f2f2;
+  --playground-selected-bg: #d3e2fd;
+
+  --playground-header-bg: #edf2fa;
+  --playground-header-bg-alt: #f8f8f8;
+
+  --playground-highlight-bg: #fff700;
+  --playground-warning-bg: #ffef00;
+
+  --playground-status-badge-bg: #f6bcc2ff;
+
+  --playground-active-control-bg: #aecbfd;
+  /* buttons, radio, spinner top */
+
+  --playground-tree-connector-color: #9aa0a6;
+  --playground-tree-expand-button-color: #5f6368;
+
+  --playground-error-text-color: red;
+  --playground-code-bg: #f5f5f5;
+  --playground-spinner-border: #f3f3f3;
+  --playground-button-border-color: #ccc;
+  --playground-split-view-gutter-color: #e5e7eb;
+  --playground-split-view-hover-color: #ddd;
+
+  /* Dimensions */
+  --playground-scrollbar-width: 10px;
+  --playground-scrollbar-height: 10px;
+
+  /* Fonts */
+  --playground-font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji",
+    "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+
+  /* Scrollbar specifics */
+  --playground-scrollbar-border: 1px solid var(--playground-hover-bg);
+  --playground-scrollbar-track-bg: transparent;
+  --playground-scrollbar-thumb-bg: rgba(121, 121, 121, 0.4);
+  --playground-scrollbar-thumb-hover-bg: rgba(0, 0, 0, 0.45);
+  --playground-scrollbar-thumb-active-bg: rgba(0, 0, 0, 0.5);
+  --playground-scrollbar-thumb-visible-fraction-bg: rgba(0, 0, 0, 0.8);
+}
+
+input,
+button,
+textarea,
+select,
+summary,
+.proportional {
+  font-family: var(--playground-font-family);
+  font-size: 12px;
+  letter-spacing: 0px;
+  line-height: 20px;
+}
+
+.proportional h3 {
+  font-family: var(--playground-font-family);
+}
+
+button {
+  cursor: pointer;
+}
+
+table {
+  border-collapse: collapse;
+}
+
+.builds-table thead th,
+.rules-table thead th {
+  background-color: var(--playground-bg-color);
+  box-shadow: inset 0 -1px 0 var(--playground-border-color-strong);
+  vertical-align: bottom;
+}
+
+.builds-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.vertical-header div {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  max-height: 16ch;
+  word-break: break-all;
+  padding: 5px 0;
+  line-height: 1.1;
+}
+
+.nav-link {
+  margin-right: 10px;
+  text-decoration: none;
+  color: var(--playground-text-color);
+}
+
+.nav-link:hover {
+  text-decoration: underline;
+}
+
+.container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  margin: 5px
+}
+
+.header-primary {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  margin-right: 5px;
+}
+
+#build-graph-path {
+  flex: 1;
+  max-width: 1200px;
+  margin: 0 5px;
+}
+
+.package-list {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+}
+
+.main-scroll {
+  width: 100%;
+  padding: 0 10px 10px;
+}
+
+.mb10 {
+  margin-bottom: 10px;
+}
+
+h3.package-section-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  text-align: center;
+  background-color: var(--playground-header-bg);
+  border-top: 1px solid var(--playground-border-color-strong);
+  border-bottom: 1px solid var(--playground-border-color-strong);
+  margin: 0;
+  padding: 2px 0;
+}
+
+h3.package-section-header:first-child {
+  border-top: none;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  padding: 0 10px;
+}
+
+summary {
+  background-color: var(--playground-header-bg);
+  padding: 2px;
+  border-top: 1px solid var(--playground-border-color-strong);
+  border-bottom: 1px solid var(--playground-border-color-strong);
+  cursor: pointer;
+  user-select: none;
+}
+
+.summary-content {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  display: inline-flex;
+  width: calc(100% - 20px);
+  /* Adjust width to leave space for the marker */
+}
+
+body.resizing {
+  cursor: row-resize;
+  /* Prevent selecting text in panels during drag */
+  user-select: none;
+  -moz-user-select: none;
+  -webkit-user-select: none;
+  -ms-user-select: none;
+}
+
+body.resizing .container {
+  /* Prevent interaction with other content during resize */
+  pointer-events: none;
+}
+
+details:first-child summary {
+  border-top: none;
+}
+
+details:not([open]):not(:last-child) summary {
+  border-bottom: none;
+}
+
+.search {
+  display: flex;
+}
+
+#search-input {
+  flex: 1;
+}
+
+#match-count {
+  width: 11ch;
+  line-height: 26px;
+  text-align: center;
+  padding: 0 7px;
+}
+
+.invalid {
+  outline: 1px auto rgb(255, 91, 91);
+}
+
+.button {
+  width: 26px;
+  text-align: center;
+  line-height: 26px;
+
+  /* Reset default button styles */
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  color: inherit;
+  cursor: pointer;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+}
+
+.button:disabled {
+  cursor: default;
+  color: #ccc;
+}
+
+.button:not([disabled]):hover {
+  background-color: var(--playground-selected-bg);
+}
+
+.selected,
+.selected:not([disabled]):hover {
+  background-color: var(--playground-active-control-bg);
+}
+
+.pane {
+  position: relative;
+}
+
+.sizer {
+  position: absolute;
+  bottom: 0;
+  height: 5px;
+  width: 100%;
+  cursor: row-resize;
+}
+
+.sizer:hover {
+  background-color: #ddd;
+  transition: background-color 0.3s linear;
+}
+
+.sizer-disabled,
+.sizer-disabled:hover {
+  pointer-events: none;
+  background-color: transparent;
+}
+
+.details-content {
+  overflow: auto;
+  contain: strict;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 0 10px 0 0;
+}
+
+.rules-table th,
+.rules-table td {
+  padding: 1px 6px;
+}
+
+tr:hover {
+  background-color: var(--playground-hover-bg);
+}
+
+code {
+  background-color: var(--playground-code-bg);
+  padding: 3px;
+  border-radius: 4px;
+  word-break: break-all;
+  line-break: anywhere;
+}
+
+ul {
+  padding-left: 20px;
+}
+
+.build-failed {
+  color: var(--playground-error-text-color);
+  cursor: default;
+  user-select: none;
+}
+
+.number-cell {
+  text-align: right;
+}
+
+.cell-center {
+  text-align: center;
+}
+
+.group-border-right {
+  border-right: 1px solid var(--playground-border-color-strong);
+}
+
+#toggle-examples {
+  vertical-align: middle;
+  margin: 0;
+}
+
+th label[for=toggle-examples] {
+  vertical-align: middle;
+  cursor: pointer;
+}
+
+.example-link {
+  text-decoration: none;
+}
+
+.example-link:hover {
+  text-decoration: underline;
+}
+
+table.rules-table:has(#toggle-examples:not(:checked)) .example-link {
+  display: none;
+}
+
+.pagination {
+  margin-top: 10px;
+}

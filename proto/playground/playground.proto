@@ -1,0 +1,65 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+edition = "2024";
+
+package devtools.foundry.x.sysgraph.playground.proto.playground;
+
+option go_package = "github.com/google/sysgraph/proto/playground";
+
+import "google/protobuf/timestamp.proto";
+
+message Process {
+  int64 id = 1;
+  int64 parent_id = 2;
+  int64 pid = 3;
+  google.protobuf.Timestamp start_time = 4;
+  google.protobuf.Timestamp end_time = 5;
+  string working_directory = 6;
+  repeated string args = 7;
+  repeated int64 file_read_ids = 8;
+  repeated int64 file_write_ids = 9;
+  int64 pipe_read_from_action_id = 10;
+  string exit_signal = 11;
+  uint32 exit_status = 12;
+}
+
+message SysGraph {
+  repeated Process processes = 1;
+  repeated string files = 2;
+  Analysis analysis = 3;
+  string analysis_error = 4;
+}
+
+// Analysis represents the analysis results for a sysgraph.
+message Analysis {
+  repeated Rule rules = 1;
+}
+
+// Rule represents an invariant rule for a sysgraph.
+message Rule {
+  string rule_name = 1;
+  string description = 2;
+  repeated RuleMatch matches = 3;
+}
+
+// RuleMatch represents the nodes in a sysgraph relevant to a rule violation.
+message RuleMatch {
+  repeated int64 process_ids = 1;
+  repeated int64 resource_ids = 2;
+}
+
+message SysGraphResponse {
+  SysGraph graph = 1;
+}
