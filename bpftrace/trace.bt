@@ -1,0 +1,348 @@
+#!/usr/bin/env bpftrace
+
+#include <linux/sched.h>
+#include <linux/fs.h>
+#include <linux/fs_struct.h>
+#include <linux/dcache.h>
+
+/* word_list and word_desc are used for bash builtin arguments, see:
+ * https://github.com/tianon/mirror-bash/blob/b8c60bc9ca365f8261fa97900b6fa939f6ebc303/command.h#L131
+ */
+struct word_desc {
+    char *word;
+    int flags;
+};
+
+struct word_list {
+    struct word_list *next;
+    struct word_desc *word;
+};
+
+config = {
+    max_strlen = 32768;      // Support massive paths and variables (up to 32 KB)
+    perf_rb_pages = 4096;    // Expand the ring buffer to 16 MB per CPU to decrease likelihood of dropped events
+    max_map_keys = 65536;    // Allow tracking up to 65k concurrent processes/files
+    log_size = 100000000;
+}
+
+/* --- Process Lifecycle & Subtree Tracking --- */
+
+tracepoint:syscalls:sys_enter_execve,
+tracepoint:syscalls:sys_enter_execveat
+{
+    $is_traced = @traced[pid];
+
+    // If this process is the one launched by `bpftrace -c`, start tracing
+    if (pid == cpid) {
+        $is_traced = 1;
+    }
+
+    if ($is_traced) {
+        @traced[pid] = 1;
+        $ts = nsecs;
+        @start_time[pid] = $ts;
+
+        printf("key=(%llu,%d) type=EXECVE nsec=%llu pid=%d parent_pid=%d tid=%d cmd=%s",
+            $ts, pid, $ts, pid, curtask->real_parent->pid, tid, str(args.filename));
+
+        // --- CWD Logging ---
+
+        // bpftrace has a path() helper, but it's not allowed in tracepoints, so we have to do this by hand
+        // This is mostly based on https://elixir.bootlin.com/linux/v6.19.3/source/fs/d_path.c#L104
+        $dentry = curtask->fs->pwd.dentry;
+        $root = curtask->fs->root;
+
+        // Cast the `struct vfsmnt` into the `struct mount` that contains it.
+        // Yes, the kernel actually does this cast...
+        // https://elixir.bootlin.com/linux/v6.19.3/source/include/linux/container_of.h#L19
+        // Pointer arithmetic on `void *` is undefined behavior in C, but allowed by a GCC
+        // extension. We need to use `uint8 *` instead for bpftrace.
+        $mptr = (uint8 *)(curtask->fs->pwd.mnt);
+        $mnt = (struct mount *)($mptr - offsetof(struct mount, mnt));
+
+        $k = 0;
+        while ($k < 100) { // Check up to 100 path segments
+            if ($dentry == $root.dentry) {
+                break;
+            }
+            $parent = $dentry->d_parent;
+            if ($dentry == $mnt->mnt.mnt_root) {
+                if ($mnt == $mnt->mnt_parent) {
+                    break;
+                }
+                $parent_mnt = $mnt->mnt_parent;
+                $dentry = $mnt->mnt_mountpoint;
+                $mnt = $parent_mnt;
+            } else {
+                if ($dentry == $parent) {
+                    break;
+                }
+                printf("key=(%llu,%d) type=CWD index=%d value=\"%s\"", $ts, pid, $k, str($dentry->d_name.name));
+                $dentry = $parent;
+            }
+            $k++;
+        }
+
+        // --- ARGV Logging ---
+        $i = 0;
+        $argv = args.argv;
+        while ($i < 500) { // Check up to 500 arguments
+            $ptr = *($argv + $i);
+            if ($ptr == 0) { break; }
+            printf("key=(%llu,%d) type=ARGV index=%d value=\"%s\"", $ts, pid, $i, str($ptr));
+            $i++;
+        }
+
+        // --- ENVP Logging ---
+        $j = 0;
+        $env = args.envp;
+        while ($j < 100) { // Check up to 100 environment variables
+            $eptr = *($env + $j);
+            if ($eptr == 0) { break; }
+            printf("key=(%llu,%d) type=ENVP index=%d value=\"%s\"", $ts, pid, $j, str($eptr));
+            $j++;
+        }
+
+        // Indicates that the argv and envp are done and the event can be emitted
+        printf("key=(%llu,%d) type=EXECVE_DONE", $ts, pid);
+    }
+}
+
+tracepoint:sched:sched_process_fork
+{
+    if (@traced[pid]) {
+        // Immediately flag the child to trace ancestry
+        @traced[args.child_pid] = 1;
+        $ts = nsecs;
+        @start_time[args.child_pid] = $ts;
+
+        printf("key=(%llu,%d) type=FORK nsec=%llu pid=%d parent_pid=%d tid=%d child_pid=%d",
+            $ts, pid, $ts, pid, curtask->real_parent->pid, tid, args.child_pid);
+    }
+}
+
+tracepoint:sched:sched_process_exit
+{
+    if (@traced[pid]) {
+        $ts = nsecs;
+        $duration = @start_time[pid] != 0 ? ($ts - @start_time[pid]) / 1000000 : 0;
+
+        printf("key=(%llu,%d) type=EXIT nsec=%llu pid=%d parent_pid=%d tid=%d exit_code=%d duration_ms=%d",
+            $ts, pid, $ts, pid, curtask->real_parent->pid, tid, curtask->exit_code, $duration);
+
+        delete(@start_time[pid]);
+        delete(@traced[pid]);
+    }
+}
+
+/* --- File IO & Pipe Tracking (VFS Layer) --- */
+
+fentry:security_file_permission {
+    if (@traced[pid]) {
+        $file = args.file;
+        $inode_obj = $file->f_inode;
+        $inode = $inode_obj->i_ino;
+        $mode = $inode_obj->i_mode;
+
+        $type = "READ";
+        if (args.mask & 0x2) {
+            $type = "WRITE";
+        }
+
+        $ts = nsecs;
+        $is_pipe = ($mode & 0170000) == 0010000;
+        $basename = str($file->f_path.dentry->d_name.name);
+
+        if (($basename == "" || $basename == "null") && !$is_pipe) {
+            return;
+        }
+        if ($is_pipe) {
+            printf("key=(%llu,%d) type=%s nsec=%llu pid=%d parent_pid=%d tid=%d inode=%lu file=pipe[%lu]",
+                $ts, pid, $type, $ts, pid, curtask->real_parent->pid, tid, $inode, $inode);
+            return;
+        }
+
+        // `path()` is supported here, but it requires a `struct path *` while we get
+        // a `struct path`. `&` isn't supported in bpftrace 0.23 and the underlying bpf_d_path
+        // call requires the BPF verifier to validate the pointer, so we can't use pointer
+        // arithmetic either.
+        //
+        // See comments in execve for this algorithm
+        $path = $file->f_path;
+        $dentry = $path.dentry;
+        $root = curtask->fs->root;
+        $mptr = (uint8 *)($path.mnt);
+        $mnt = (struct mount *)($mptr - offsetof(struct mount, mnt));
+        printf("key=(%llu,%d) type=%s nsec=%llu pid=%d parent_pid=%d tid=%d inode=%lu",
+            $ts, pid, $type, $ts, pid, curtask->real_parent->pid, tid, $inode);
+        $k = 0;
+        while ($k < 100) { // Check up to 100 path segments
+            if ($dentry == $root.dentry) {
+                break;
+            }
+            $parent = $dentry->d_parent;
+            if ($dentry == $mnt->mnt.mnt_root) {
+                if ($mnt == $mnt->mnt_parent) {
+                    break;
+                }
+                $parent_mnt = $mnt->mnt_parent;
+                $dentry = $mnt->mnt_mountpoint;
+                $mnt = $parent_mnt;
+            } else {
+                if ($dentry == $parent) {
+                    break;
+                }
+                printf("key=(%llu,%d) type=FILENAME index=%d value=\"%s\"", $ts, pid, $k, str($dentry->d_name.name));
+                $dentry = $parent;
+            }
+            $k++;
+        }
+        printf("key=(%llu,%d) type=FILENAME_DONE", $ts, pid);
+    }
+}
+
+/* To track newly created pipes by inode, we need to hook here. The pipe/pipe2
+ * syscalls only operate on file descriptors and the intervening __do_pipe_flags
+ * and create_pipe_files calls both take a `struct file **`, which the BPF
+ * verifier doesn't like. All pipes are created in the pipefs superblock, so
+ * filter there to avoid other pseudofiles
+ */
+fentry:alloc_file_pseudo
+{
+    if (@traced[pid] && str(args.mnt->mnt_sb->s_type->name) == "pipefs") {
+        $ts = nsecs;
+        $cwd_dir = str(curtask->fs->pwd.dentry->d_name.name);
+        $inode = args.inode->i_ino;
+        printf("key=(%llu,%d) type=ALLOC_PIPE nsec=%llu pid=%d parent_pid=%d tid=%d wd=%s inode=%lu file=pipe[%lu]",
+            $ts, pid, $ts, pid, curtask->real_parent->pid, tid, $cwd_dir, $inode, $inode);
+    }
+}
+
+/* --- Specific Open Tracking --- */
+
+tracepoint:syscalls:sys_enter_open,
+tracepoint:syscalls:sys_enter_openat
+{
+    if (@traced[pid]) {
+        $ts = nsecs;
+        $cwd_dir = str(curtask->fs->pwd.dentry->d_name.name);
+
+        printf("key=(%llu,%d) type=OPEN_REQ nsec=%llu pid=%d parent_pid=%d tid=%d wd=%s file=%s",
+            $ts, pid, $ts, pid, curtask->real_parent->pid, tid, $cwd_dir, str(args.filename));
+    }
+}
+
+/* --- Rename & Delete Tracking --- */
+
+tracepoint:syscalls:sys_enter_rename,
+tracepoint:syscalls:sys_enter_renameat,
+tracepoint:syscalls:sys_enter_renameat2
+{
+    if (@traced[pid]) {
+        $ts = nsecs;
+        $cwd_dir = str(curtask->fs->pwd.dentry->d_name.name);
+        printf("key=(%llu,%d) type=RENAME nsec=%llu pid=%d parent_pid=%d tid=%d wd=%s old_name=%s new_name=%s",
+            $ts, pid, $ts, pid, curtask->real_parent->pid, tid, $cwd_dir, str(args.oldname), str(args.newname));
+    }
+}
+
+tracepoint:syscalls:sys_enter_unlink,
+tracepoint:syscalls:sys_enter_unlinkat,
+tracepoint:syscalls:sys_enter_rmdir
+{
+    if (@traced[pid]) {
+        $ts = nsecs;
+        $cwd_dir = str(curtask->fs->pwd.dentry->d_name.name);
+        printf("key=(%llu,%d) type=DELETE nsec=%llu pid=%d parent_pid=%d tid=%d wd=%s file=%s",
+            $ts, pid, $ts, pid, curtask->real_parent->pid, tid, $cwd_dir, str(args.pathname));
+    }
+}
+
+/* --- Directory Creation --- */
+
+tracepoint:syscalls:sys_enter_mkdir,
+tracepoint:syscalls:sys_enter_mkdirat
+{
+    if (@traced[pid]) {
+        $ts = nsecs;
+        $cwd_dir = str(curtask->fs->pwd.dentry->d_name.name);
+        printf("key=(%llu,%d) type=MKDIR nsec=%llu pid=%d parent_pid=%d tid=%d wd=%s path=%s",
+            $ts, pid, $ts, pid, curtask->real_parent->pid, tid, $cwd_dir, str(args.pathname));
+    }
+}
+
+/* --- Permissions & Ownership --- */
+
+tracepoint:syscalls:sys_enter_chmod,
+tracepoint:syscalls:sys_enter_fchmod,
+tracepoint:syscalls:sys_enter_fchmodat
+{
+    if (@traced[pid]) {
+        $ts = nsecs;
+        $cwd_dir = str(curtask->fs->pwd.dentry->d_name.name);
+        // Note: fchmod uses a file descriptor (fd), so filename might not be easily available
+        // without mapping fd->filename, but chmod/fchmodat use paths.
+        printf("key=(%llu,%d) type=CHMOD nsec=%llu pid=%d parent_pid=%d tid=%d wd=%s mode=%o",
+            $ts, pid, $ts, pid, curtask->real_parent->pid, tid, $cwd_dir, args.mode);
+    }
+}
+
+tracepoint:syscalls:sys_enter_chown,
+tracepoint:syscalls:sys_enter_lchown,
+tracepoint:syscalls:sys_enter_fchown,
+tracepoint:syscalls:sys_enter_fchownat
+{
+    if (@traced[pid]) {
+        $ts = nsecs;
+        $cwd_dir = str(curtask->fs->pwd.dentry->d_name.name);
+        printf("key=(%llu,%d) type=CHOWN nsec=%llu pid=%d parent_pid=%d tid=%d wd=%s uid=%d gid=%d",
+            $ts, pid, $ts, pid, curtask->real_parent->pid, tid, $cwd_dir, args.user, args.group);
+    }
+}
+
+/* --- Links & Symlinks --- */
+
+tracepoint:syscalls:sys_enter_symlink,
+tracepoint:syscalls:sys_enter_symlinkat
+{
+    if (@traced[pid]) {
+        $ts = nsecs;
+        $cwd_dir = str(curtask->fs->pwd.dentry->d_name.name);
+        printf("key=(%llu,%d) type=SYMLINK nsec=%llu pid=%d parent_pid=%d tid=%d wd=%s old_name=%s new_name=%s",
+            $ts, pid, $ts, pid, curtask->real_parent->pid, tid, $cwd_dir, str(args.oldname), str(args.newname));
+    }
+}
+
+/* --- Bash builtins --- */
+
+uprobe:/bin/bash:*_builtin
+{
+    /* find_shell_builtin is currently the only bash function ending with
+     * _builtin that isn't the implementation of a builtin
+     */
+    if (probe == "uprobe:/bin/bash:find_shell_builtin") {
+        return;
+    }
+    $ts = nsecs;
+    $cwd_dir = str(curtask->fs->pwd.dentry->d_name.name);
+
+    // --- ARGV Logging ---
+    printf("key=(%llu,%d) type=BUILTIN nsec=%llu pid=%d parent_pid=%d tid=%d wd=%s builtin=%s",
+        $ts, pid, $ts, pid, curtask->real_parent->pid, tid, $cwd_dir, probe);
+
+    $word_list = (struct word_list *) arg0;
+    $i = 0;
+    while ($i < 500) { // Check up to 500 arguments
+        if ($word_list == 0) { break; }
+        $word = $word_list->word->word;
+        printf("key=(%llu,%d) type=ARGV index=%d value=\"%s\"", $ts, pid, $i, str($word));
+        $word_list = $word_list->next;
+        $i++;
+    }
+}
+
+END
+{
+    clear(@start_time);
+    clear(@traced);
+}
