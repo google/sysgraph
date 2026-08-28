@@ -17,7 +17,16 @@
 import {defineConfig} from 'vite';
 
 export default defineConfig({
+  esbuild: {
+    target: 'es2022',
+  },
+  optimizeDeps: {
+    esbuildOptions: {
+      target: 'es2022',
+    },
+  },
   build: {
+    target: 'es2022',
     // Output directly to the Go server's embed directory
     outDir: '../cmd/playground_server/embed/ui',
     emptyOutDir: true,
